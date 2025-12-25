@@ -1,0 +1,7 @@
+{
+  "name": "BizFlow Mobile",
+  "description": "A modern, mobile-responsive business management dashboard based on the BizFlow web interface, featuring analytics, staff management, and real-time insights.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
