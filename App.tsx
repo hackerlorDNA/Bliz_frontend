@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
+import { GoogleGenAI, Type } from "@google/genai";
 import MobileLayout from './components/MobileLayout';
 import StatsCard from './components/StatsCard';
 import StaffSection from './components/StaffSection';
@@ -10,21 +11,67 @@ import CustomersScreen from './components/CustomersScreen';
 import ReportsScreen from './components/ReportsScreen';
 import AIDraftCard from './components/AIDraftCard';
 import { TabType, AIDraftOrder } from './types';
-import { NAVIGATION_TABS } from './constants';
-import { TrendingUp, Package, ShoppingCart, UserPlus, LogOut, ChevronRight, Shield, BellRing, Smartphone, Sparkles, Mic, Send } from 'lucide-react';
+import { 
+  TrendingUp, 
+  ShoppingCart, 
+  LogOut, 
+  ChevronRight, 
+  Shield, 
+  BellRing, 
+  Smartphone, 
+  Sparkles, 
+  Mic, 
+  Send, 
+  Loader2,
+  Key,
+  CheckCircle2,
+  AlertCircle
+} from 'lucide-react';
+
+// Define the interface for AIStudio to match environment expectations
+interface AIStudio {
+  hasSelectedApiKey: () => Promise<boolean>;
+  openSelectKey: () => Promise<void>;
+}
+
+// Khai báo kiểu cho window.aistudio để TypeScript không báo lỗi
+// Đảm bảo kiểu dữ liệu khớp chính xác với yêu cầu của hệ thống (AIStudio)
+declare global {
+  interface Window {
+    aistudio?: AIStudio;
+  }
+}
 
 const App: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [activeTab, setActiveTab] = useState<TabType>('overview');
   const [aiInput, setAiInput] = useState('');
   const [aiDraft, setAiDraft] = useState<AIDraftOrder | null>(null);
+  const [isAiProcessing, setIsAiProcessing] = useState(false);
+  const [hasApiKey, setHasApiKey] = useState<boolean | null>(null);
 
   useEffect(() => {
     const authStatus = localStorage.getItem('isLoggedIn');
     if (authStatus === 'true') {
       setIsAuthenticated(true);
     }
+    checkApiKey();
   }, []);
+
+  const checkApiKey = async () => {
+    if (window.aistudio) {
+      const selected = await window.aistudio.hasSelectedApiKey();
+      setHasApiKey(selected);
+    }
+  };
+
+  const handleConnectAi = async () => {
+    if (window.aistudio) {
+      await window.aistudio.openSelectKey();
+      // Giả định chọn thành công theo race condition rule
+      setHasApiKey(true);
+    }
+  };
 
   const handleLogin = () => {
     setIsAuthenticated(true);
@@ -37,21 +84,56 @@ const App: React.FC = () => {
     setActiveTab('overview');
   };
 
-  const handleAiSubmit = (e: React.FormEvent) => {
+  const handleAiSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!aiInput.trim()) return;
+    if (!aiInput.trim() || isAiProcessing) return;
 
-    // Giả lập AI xử lý câu lệnh
-    // "bán 10 bao xi măng cho anh Hòa, ghi nợ nha"
-    const isDebt = aiInput.toLowerCase().includes('nợ');
-    const hasHoa = aiInput.toLowerCase().includes('hòa');
-    
-    setAiDraft({
-      customerName: hasHoa ? 'Anh Hòa' : 'Khách vãng lai',
-      items: [{ name: 'Xi măng Hà Tiên', quantity: 10 }],
-      isDebt: isDebt
-    });
-    setAiInput('');
+    setIsAiProcessing(true);
+    try {
+      // Khởi tạo instance mới mỗi lần gọi để đảm bảo lấy key mới nhất
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: `Phân tích câu lệnh bán hàng sau và trích xuất thông tin đơn hàng: "${aiInput}"`,
+        config: {
+          systemInstruction: "Bạn là trợ lý bán hàng thông minh cho cửa hàng vật liệu xây dựng. Hãy trích xuất thông tin đơn hàng dưới dạng JSON chính xác. Nếu không rõ tên khách hãy để 'Khách vãng lai'. Nếu không rõ đơn vị, mặc định số lượng là số.",
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              customerName: { type: Type.STRING, description: "Tên khách hàng" },
+              items: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    name: { type: Type.STRING, description: "Tên sản phẩm" },
+                    quantity: { type: Type.NUMBER, description: "Số lượng" }
+                  },
+                  required: ["name", "quantity"]
+                }
+              },
+              isDebt: { type: Type.BOOLEAN, description: "Có phải ghi nợ không" }
+            },
+            required: ["customerName", "items", "isDebt"]
+          }
+        },
+      });
+
+      const result = JSON.parse(response.text || "{}");
+      setAiDraft(result);
+      setAiInput('');
+    } catch (error: any) {
+      console.error("AI Error:", error);
+      if (error?.message?.includes("Requested entity was not found")) {
+        setHasApiKey(false);
+        alert("Lỗi xác thực API Key. Vui lòng kết nối lại trong phần Cài đặt.");
+      } else {
+        alert("AI không hiểu câu lệnh này hoặc có lỗi kết nối. Vui lòng thử lại!");
+      }
+    } finally {
+      setIsAiProcessing(false);
+    }
   };
 
   if (!isAuthenticated) {
@@ -69,23 +151,29 @@ const App: React.FC = () => {
             </div>
 
             {/* AI Command Input */}
-            <div className="bg-white rounded-3xl border border-blue-50 p-2 shadow-xl shadow-blue-100/50">
+            <div className={`bg-white rounded-3xl border ${isAiProcessing ? 'border-blue-400' : 'border-blue-50'} p-2 shadow-xl shadow-blue-100/50 transition-all`}>
               <form onSubmit={handleAiSubmit} className="relative flex items-center">
                 <div className="p-3 text-blue-600">
-                  <Sparkles size={20} className="animate-pulse" />
+                  {isAiProcessing ? (
+                    <Loader2 size={20} className="animate-spin" />
+                  ) : (
+                    <Sparkles size={20} className="animate-pulse" />
+                  )}
                 </div>
                 <input 
                   type="text" 
-                  placeholder="Thử: 'Bán 10 bao xi măng cho anh Hòa...'"
+                  placeholder={!hasApiKey ? "Vui lòng kết nối AI trong Cài đặt..." : (isAiProcessing ? "AI đang xử lý..." : "Bán 10 bao xi măng cho anh Hòa...")}
                   className="flex-1 py-3 text-sm font-medium outline-none bg-transparent placeholder-gray-400"
                   value={aiInput}
+                  disabled={isAiProcessing || !hasApiKey}
                   onChange={(e) => setAiInput(e.target.value)}
                 />
-                <button type="submit" className="p-3 text-blue-600 hover:bg-blue-50 rounded-2xl transition-colors">
+                <button 
+                  type="submit" 
+                  disabled={isAiProcessing || !aiInput.trim() || !hasApiKey}
+                  className="p-3 text-blue-600 hover:bg-blue-50 rounded-2xl transition-colors disabled:opacity-30"
+                >
                   <Send size={20} />
-                </button>
-                <button type="button" className="p-3 text-gray-400">
-                  <Mic size={20} />
                 </button>
               </form>
             </div>
@@ -129,23 +217,16 @@ const App: React.FC = () => {
           </div>
         );
 
-      case 'products':
-        return <ProductsScreen />;
-      
-      case 'orders':
-        return <OrdersScreen />;
-
-      case 'customers':
-        return <CustomersScreen />;
-      
-      case 'reports':
-        return <ReportsScreen />;
-
+      case 'products': return <ProductsScreen />;
+      case 'orders': return <OrdersScreen />;
+      case 'customers': return <CustomersScreen />;
+      case 'reports': return <ReportsScreen />;
       case 'settings':
         return (
-          <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-500">
+          <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-500 pb-10">
             <h2 className="text-2xl font-bold text-gray-900">Cấu hình</h2>
             
+            {/* User Profile Card */}
             <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden">
               <div className="p-6 flex items-center gap-4 bg-gradient-to-br from-blue-50 to-white">
                  <div className="w-16 h-16 rounded-2xl overflow-hidden border-2 border-white shadow-md">
@@ -158,67 +239,41 @@ const App: React.FC = () => {
               </div>
             </div>
 
+            {/* AI Connection Section */}
             <div className="space-y-4">
-               <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] px-1">Tùy chỉnh hệ thống</h3>
-               <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden divide-y divide-gray-50">
-                  <div className="p-4 flex items-center justify-between active:bg-gray-50 transition-colors">
+               <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] px-1">Dịch vụ AI thông minh</h3>
+               <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-4">
+                  <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center"><Shield size={20} /></div>
+                      <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center">
+                        <Sparkles size={20} />
+                      </div>
                       <div>
-                        <span className="block font-bold text-gray-900 text-sm">Bảo mật & Quyền hạn</span>
-                        <span className="text-[10px] text-gray-400">Thiết lập 2FA, phân quyền nhân viên</span>
+                        <span className="block font-bold text-gray-900 text-sm">Trạng thái Gemini AI</span>
+                        <div className="flex items-center gap-1 mt-0.5">
+                          {hasApiKey ? (
+                            <>
+                              <CheckCircle2 size={12} className="text-green-500" />
+                              <span className="text-[10px] text-green-600 font-bold uppercase">Đã kết nối</span>
+                            </>
+                          ) : (
+                            <>
+                              <AlertCircle size={12} className="text-amber-500" />
+                              <span className="text-[10px] text-amber-600 font-bold uppercase">Chưa cấu hình</span>
+                            </>
+                          )}
+                        </div>
                       </div>
                     </div>
-                    <ChevronRight size={18} className="text-gray-300" />
+                    {!hasApiKey && (
+                      <button 
+                        onClick={handleConnectAi}
+                        className="bg-indigo-600 text-white px-4 py-2 rounded-xl text-xs font-bold shadow-lg shadow-indigo-100 active:scale-95 transition-all"
+                      >
+                        Kết nối ngay
+                      </button>
+                    )}
                   </div>
-                  <div className="p-4 flex items-center justify-between active:bg-gray-50 transition-colors">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 bg-purple-50 text-purple-600 rounded-xl flex items-center justify-center"><BellRing size={20} /></div>
-                      <div>
-                        <span className="block font-bold text-gray-900 text-sm">Thông báo & Sự kiện</span>
-                        <span className="text-[10px] text-gray-400">Quản lý cảnh báo tồn kho, công nợ</span>
-                      </div>
-                    </div>
-                    <ChevronRight size={18} className="text-gray-300" />
-                  </div>
-                  <div className="p-4 flex items-center justify-between active:bg-gray-50 transition-colors">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 bg-green-50 text-green-600 rounded-xl flex items-center justify-center"><Smartphone size={20} /></div>
-                      <div>
-                        <span className="block font-bold text-gray-900 text-sm">Kết nối máy in</span>
-                        <span className="text-[10px] text-gray-400">Kết nối máy in nhiệt Bluetooth/Wifi</span>
-                      </div>
-                    </div>
-                    <ChevronRight size={18} className="text-gray-300" />
-                  </div>
-               </div>
-            </div>
-
-            <button 
-              onClick={handleLogout}
-              className="w-full flex items-center justify-center gap-2 p-4 bg-red-50 text-red-600 rounded-2xl font-bold active:scale-[0.98] transition-all"
-            >
-              <LogOut size={20} />
-              Đăng xuất tài khoản
-            </button>
-          </div>
-        );
-      
-      default:
-        return (
-          <div className="flex flex-col items-center justify-center py-20 text-center">
-            <h2 className="text-xl font-bold text-gray-800 capitalize">{activeTab}</h2>
-            <button onClick={() => setActiveTab('overview')} className="mt-4 text-blue-600 font-bold">Quay về</button>
-          </div>
-        );
-    }
-  };
-
-  return (
-    <MobileLayout activeTab={activeTab} setActiveTab={setActiveTab}>
-      {renderContent()}
-    </MobileLayout>
-  );
-};
-
-export default App;
+                  <p className="text-[10px] text-gray-400 leading-relaxed italic">
+                    * Sử dụng công nghệ Gemini 3 Flash để tự động tạo đơn hàng từ lời nói và tin nhắn.
+                    Bạn cần chọn một API Key từ Project đã bật Billing tại <a href="
